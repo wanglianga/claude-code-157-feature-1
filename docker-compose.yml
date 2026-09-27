@@ -1,0 +1,30 @@
+# 可选的容器化依赖(本机已有 PostgreSQL 时用 scripts/local-db.sh 即可, 无需启动)
+# 用法: docker compose up -d
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: escort
+      POSTGRES_USER: escort
+      POSTGRES_PASSWORD: escort
+    ports:
+      - "55432:5432"
+    volumes:
+      - escort-pg:/var/lib/postgresql/data
+
+  kafka:
+    image: bitnami/kafka:3.7
+    environment:
+      KAFKA_CFG_NODE_ID: "0"
+      KAFKA_CFG_PROCESS_ROLES: "broker,controller"
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: "0@kafka:9093"
+      KAFKA_CFG_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093"
+      KAFKA_CFG_ADVERTISED_LISTENERS: "PLAINTEXT://localhost:9092"
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT"
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_CFG_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+    ports:
+      - "9092:9092"
+
+volumes:
+  escort-pg:

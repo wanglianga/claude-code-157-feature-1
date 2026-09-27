@@ -1,0 +1,4 @@
+escort:
+  kafka:
+    enabled: true
+  zone-id: Asia/Shanghai
