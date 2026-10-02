@@ -37,6 +37,7 @@ class DashboardService(
     private val violationRepository: ViolationRecordRepository,
     private val applicationRepository: EscortApplicationRepository,
     @Suppress("unused") private val syncRepository: PermitSyncRepository,
+    private val migrationService: PermitMigrationService,
     @Value("\${escort.zone-id}") zoneIdValue: String
 ) {
     private val zoneId: ZoneId = ZoneId.of(zoneIdValue)
@@ -71,6 +72,7 @@ class DashboardService(
         val byType = violations.groupingBy { it.type.name }.eachCount().mapValues { it.value.toLong() }
         val expiredNotReturned = violationRepository.countByWardCodeAndType(wardCode, ViolationType.EXPIRED_NOT_RETURNED)
         val pendingApplications = applicationRepository.countByWardCodeAndStatus(wardCode, ApplicationStatus.PENDING)
+        val pendingTransferApprovals = migrationService.pendingWardApprovals(wardCode)
 
         // 退证效率: 窗口内退证证件从签发到退证的平均小时数
         val returnedPermits = permitRepository.findAll().filter {
@@ -96,6 +98,7 @@ class DashboardService(
             nightAbnormalCount = nightAbnormal, outOfHoursCount = outOfHoursToday,
             violationCount = violations.size.toLong(), violationsByType = byType,
             expiredNotReturnedCount = expiredNotReturned, pendingApplications = pendingApplications,
+            pendingTransferApprovals = pendingTransferApprovals,
             avgReturnHours = avgReturnHours?.let { Math.round(it * 100) / 100.0 },
             openViolations = openViolations
         )

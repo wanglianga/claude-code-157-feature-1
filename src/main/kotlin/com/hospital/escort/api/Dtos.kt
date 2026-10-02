@@ -105,6 +105,8 @@ data class ScanRequest(
     val direction: com.hospital.escort.domain.ScanDirection? = null,
     @field:NotBlank(message = "门禁位置不能为空")
     val gateLocation: String = "",
+    /** 扫码点所属病区(迁移期判定旧证是否试图进入新病区); 缺省按门禁位置前缀/证件病区推断 */
+    val wardCode: String? = null,
     val scannedAt: Instant? = null
 )
 
@@ -119,6 +121,7 @@ data class ScanResultDto(
     val escortChanged: Boolean,
     val multiPermitShared: Boolean,
     val wardLockdown: Boolean,
+    val handoverPass: Boolean,
     val denyReason: String?,
     val violations: List<String>
 )
@@ -218,7 +221,8 @@ data class WardPolicyDto(
     val maxEscortsPerPatient: Int,
     val nightEscortRequiresApproval: Boolean,
     val lockdown: Boolean,
-    val lockdownReason: String?
+    val lockdownReason: String?,
+    val wardCategory: String
 )
 
 data class WardLockdownRequest(
@@ -251,6 +255,124 @@ data class DepositDisputeRequest(
     val note: String? = null
 )
 
+// ---------- 患者转科陪护证迁移(普通病房 -> 重症过渡病区) ----------
+
+data class StartTransferRequest(
+    @field:NotBlank(message = "目标病区不能为空")
+    val toWardCode: String = "",
+    val bedNo: String? = null,
+    @field:NotBlank(message = "操作人不能为空")
+    val operator: String = "",
+    /** 迁移启动时是否同时发放一次"必要交接"临时通行(默认发放, 限时2小时) */
+    val issueHandoverPass: Boolean = true,
+    val handoverPassMinutes: Long = 120,
+    /** 交接通行生效起点(缺省为当前时刻) */
+    val handoverPassFrom: Instant? = null
+)
+
+data class FamilyRuleConfirmRequest(
+    @field:NotBlank(message = "确认人不能为空")
+    val confirmedBy: String = "",
+    @field:NotNull(message = "必须确认已阅读并同意新病区陪护规则")
+    val acknowledged: Boolean? = null,
+    val note: String? = null
+)
+
+data class TransferDecisionRequest(
+    @field:NotNull(message = "审批结果不能为空")
+    val approved: Boolean? = null,
+    @field:NotBlank(message = "审批护士不能为空")
+    val decidedBy: String = "",
+    val note: String? = null,
+    /** 重症过渡病区夜间陪护专项审批 */
+    val approveNightCare: Boolean = false,
+    /** 批准继续陪护时新证有效期截止(缺省沿用旧证有效期) */
+    val newPeriodEnd: Instant? = null,
+    /** 不允许陪护时的物品交接清单(每行一项); 为空时使用默认清单 */
+    val handoverItems: List<String>? = null,
+    /** 不允许陪护时探视说明补充 */
+    val visitNote: String? = null
+)
+
+data class HandoverPassGrantRequest(
+    @field:NotBlank(message = "发放人不能为空")
+    val operator: String = "",
+    val validMinutes: Long = 120,
+    /** 通行生效起点(缺省为当前时刻) */
+    val validFrom: Instant? = null
+)
+
+data class TransferOldPermitReturnRequest(
+    @field:NotBlank(message = "退证人不能为空")
+    val returnedBy: String = "",
+    val channel: String = "NEW_WARD_DESK",
+    val note: String? = null,
+    /** 签收交接的新病区护士 */
+    val receivedBy: String? = null
+)
+
+data class TransferDepositReleaseRequest(
+    @field:NotBlank(message = "操作人不能为空")
+    val operator: String = "",
+    val note: String? = null
+)
+
+data class TransferDto(
+    val transferNo: String,
+    val caseNo: String,
+    val oldWardCode: String,
+    val newWardCode: String,
+    val bedNo: String?,
+    val oldPermitNo: String?,
+    val escortName: String,
+    val escortIdNo: String,
+    val escortPhone: String?,
+    val status: String,
+    val familyRuleNotice: String?,
+    val familyRuleAcknowledged: Boolean,
+    val familyConfirmedAt: Instant?,
+    val familyConfirmedBy: String?,
+    val familyNote: String?,
+    val newPermitNo: String?,
+    val decidedBy: String?,
+    val decidedAt: Instant?,
+    val decisionNote: String?,
+    val oldPermitReturnedAt: Instant?,
+    val depositReleased: Boolean,
+    val depositReleasedAt: Instant?,
+    val escortLiabilityEnded: Boolean,
+    val createdAt: Instant
+)
+
+data class HandoverDto(
+    val docNo: String,
+    val transferNo: String,
+    val caseNo: String,
+    val patientInpatientNo: String,
+    val oldWardCode: String,
+    val newWardCode: String,
+    val escortName: String,
+    val items: List<String>,
+    val visitInstruction: String,
+    val oldPermitReturned: Boolean,
+    val oldPermitReturnedAt: Instant?,
+    val receivedBy: String?,
+    val depositReleasable: Boolean,
+    val generatedBy: String,
+    val createdAt: Instant
+)
+
+data class HandoverPassGrantDto(
+    val transferNo: String,
+    val permitNo: String,
+    val wardCode: String,
+    val validFrom: Instant,
+    val validUntil: Instant,
+    val usedIn: Boolean,
+    val usedOut: Boolean,
+    val grantedBy: String
+)
+
 // ---------- 查询 ----------
 
 data class CaseArchiveDto(
@@ -265,6 +387,8 @@ data class CaseArchiveDto(
     val scans: List<ScanRecordDto>,
     val replacements: List<ReplacementDto>,
     val violations: List<ViolationDto>,
+    val transfers: List<TransferDto>,
+    val handovers: List<HandoverDto>,
     val events: List<EventDto>,
     val createdAt: Instant,
     val closedAt: Instant?
@@ -282,6 +406,7 @@ data class ScanRecordDto(
     val escortChanged: Boolean,
     val multiPermitShared: Boolean,
     val wardLockdown: Boolean,
+    val handoverPass: Boolean,
     val denyReason: String?
 )
 
@@ -341,6 +466,7 @@ data class WardDashboardDto(
     val violationsByType: Map<String, Long>,
     val expiredNotReturnedCount: Long,
     val pendingApplications: Long,
+    val pendingTransferApprovals: Long,
     val avgReturnHours: Double?,
     val openViolations: List<ViolationDto>
 )

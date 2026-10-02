@@ -25,7 +25,7 @@ import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 
 /**
- * 单条陪护记录归档查询: 申请、审批、证件、进出、替换、违规、事件流全部在同一视图。
+ * 单条陪护记录归档查询: 申请、审批、证件、进出、替换、违规、转科迁移、交接、事件流全部在同一视图。
  */
 @Service
 class ArchiveQueryService(
@@ -37,7 +37,8 @@ class ArchiveQueryService(
     private val violationRepository: ViolationRecordRepository,
     private val eventRepository: CaseEventRepository,
     private val syncRepository: PermitSyncRepository,
-    private val noticeRepository: WardNoticeRepository
+    private val noticeRepository: WardNoticeRepository,
+    private val migrationService: PermitMigrationService
 ) {
 
     @Transactional(readOnly = true)
@@ -47,7 +48,6 @@ class ArchiveQueryService(
 
         val applications = applicationRepository.findByCaseIdOrderBySubmittedAtAsc(caseId)
         val permits = permitRepository.findByCaseIdOrderByIssuedAtAsc(caseId)
-        val permitNoById = permits.associate { it.id to it.permitNo }
 
         return CaseArchiveDto(
             caseNo = escortCase.caseNo,
@@ -65,6 +65,7 @@ class ArchiveQueryService(
             },
             scans = scanRepository.findByCaseIdOrderByScannedAtAsc(caseId).map { it.toDto() },
             replacements = replacementRepository.findByCaseIdOrderByRequestedAtAsc(caseId).map { r ->
+                val permitNoById = permits.associate { pp -> pp.id to pp.permitNo }
                 ReplacementDto(
                     id = r.id!!, reason = r.reason.name, detail = r.detail, status = r.status.name,
                     oldPermitNo = r.oldPermitId?.let { permitNoById[it] },
@@ -73,6 +74,8 @@ class ArchiveQueryService(
                 )
             },
             violations = violationRepository.findByCaseIdOrderByCreatedAtAsc(caseId).map { it.toDto() },
+            transfers = migrationService.listByCase(caseId).map { migrationService.toTransferDto(it) },
+            handovers = migrationService.listHandoversByCase(caseId).map { migrationService.toHandoverDto(it) },
             events = eventRepository.findByCaseIdOrderByCreatedAtAsc(caseId).map {
                 EventDto(it.eventType.name, it.actor, it.summary, it.detail, it.refType, it.refId, it.createdAt)
             },
@@ -122,7 +125,7 @@ fun com.hospital.escort.domain.ScanRecord.toDto() = ScanRecordDto(
     id = id!!, permitNo = permitNo, direction = direction.name, gateLocation = gateLocation,
     scannedAt = scannedAt, scannedIdNo = scannedIdNo, result = result.name,
     outOfHours = outOfHours, escortChanged = escortChanged, multiPermitShared = multiPermitShared,
-    wardLockdown = wardLockdown, denyReason = denyReason
+    wardLockdown = wardLockdown, handoverPass = handoverPass, denyReason = denyReason
 )
 
 fun com.hospital.escort.domain.ViolationRecord.toDto() = ViolationDto(

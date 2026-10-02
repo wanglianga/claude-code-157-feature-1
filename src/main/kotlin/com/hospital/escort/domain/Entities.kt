@@ -40,6 +40,10 @@ class WardPolicy(
     @Column(name = "lockdown_reason")
     var lockdownReason: String? = null,
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "ward_category", nullable = false)
+    var wardCategory: WardCategory = WardCategory.GENERAL,
+
     @Column(name = "updated_at", nullable = false)
     var updatedAt: Instant = Instant.now()
 )
@@ -234,6 +238,10 @@ class EscortPermit(
     @Column(name = "return_channel")
     var returnChannel: String? = null,
 
+    /** 转科迁移挂起: 患者转入重症过渡病区后, 旧证暂停, 迁移完成前不得进入新病区 */
+    @Column(name = "transfer_suspended", nullable = false)
+    var transferSuspended: Boolean = false,
+
     @Version
     @Column(name = "version", nullable = false)
     var version: Long = 0
@@ -359,6 +367,10 @@ class ScanRecord(
     @Column(name = "ward_lockdown", nullable = false)
     var wardLockdown: Boolean = false,
 
+    /** 迁移期必要交接: 凭交接授权临时放行 */
+    @Column(name = "handover_pass", nullable = false)
+    var handoverPass: Boolean = false,
+
     @Column(name = "deny_reason")
     var denyReason: String? = null,
 
@@ -469,6 +481,208 @@ class WardNotice(
 
     @Column(name = "read", nullable = false)
     var read: Boolean = false,
+
+    @Column(name = "created_at", nullable = false)
+    var createdAt: Instant = Instant.now()
+)
+
+/**
+ * 陪护证转科迁移单: 患者由普通病房转入重症过渡病区,
+ * 原陪护权限不再适用 —— 暂停原证 -> 家属重新确认陪护规则 -> 新病区护士审批 -> 继续陪护/不允许陪护。
+ */
+@Entity
+@Table(name = "permit_transfer")
+class PermitTransfer(
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    var id: Long? = null,
+
+    @Column(name = "case_id", nullable = false)
+    var caseId: Long = 0,
+
+    @Column(name = "transfer_no", nullable = false, unique = true)
+    var transferNo: String = "",
+
+    @Column(name = "old_ward_code", nullable = false)
+    var oldWardCode: String = "",
+
+    @Column(name = "new_ward_code", nullable = false)
+    var newWardCode: String = "",
+
+    @Column(name = "bed_no")
+    var bedNo: String? = null,
+
+    @Column(name = "old_permit_id")
+    var oldPermitId: Long? = null,
+
+    @Column(name = "old_permit_no")
+    var oldPermitNo: String? = null,
+
+    @Column(name = "escort_name", nullable = false)
+    var escortName: String = "",
+
+    @Column(name = "escort_id_no", nullable = false)
+    var escortIdNo: String = "",
+
+    @Column(name = "escort_phone")
+    var escortPhone: String? = null,
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status", nullable = false)
+    var status: TransferStatus = TransferStatus.PENDING_FAMILY_CONFIRM,
+
+    /** 推送给家属的新病区陪护规则(探视时间/陪护上限/夜间陪护/感染控制要求) */
+    @Column(name = "family_rule_notice")
+    var familyRuleNotice: String? = null,
+
+    @Column(name = "family_rule_acknowledged", nullable = false)
+    var familyRuleAcknowledged: Boolean = false,
+
+    @Column(name = "family_confirmed_at")
+    var familyConfirmedAt: Instant? = null,
+
+    @Column(name = "family_confirmed_by")
+    var familyConfirmedBy: String? = null,
+
+    @Column(name = "family_note")
+    var familyNote: String? = null,
+
+    @Column(name = "new_application_id")
+    var newApplicationId: Long? = null,
+
+    @Column(name = "new_permit_id")
+    var newPermitId: Long? = null,
+
+    @Column(name = "old_permit_returned_at")
+    var oldPermitReturnedAt: Instant? = null,
+
+    @Column(name = "old_permit_returned_by")
+    var oldPermitReturnedBy: String? = null,
+
+    @Column(name = "decided_by")
+    var decidedBy: String? = null,
+
+    @Column(name = "decided_at")
+    var decidedAt: Instant? = null,
+
+    @Column(name = "decision_note")
+    var decisionNote: String? = null,
+
+    /** 押金释放: 仅当旧陪护证实体退回后方可释放 */
+    @Column(name = "deposit_released", nullable = false)
+    var depositReleased: Boolean = false,
+
+    @Column(name = "deposit_released_at")
+    var depositReleasedAt: Instant? = null,
+
+    @Column(name = "deposit_released_by")
+    var depositReleasedBy: String? = null,
+
+    @Column(name = "release_note")
+    var releaseNote: String? = null,
+
+    /** 陪护责任是否已结束(旧证退回+交接完成) */
+    @Column(name = "escort_liability_ended", nullable = false)
+    var escortLiabilityEnded: Boolean = false,
+
+    @Column(name = "created_at", nullable = false)
+    var createdAt: Instant = Instant.now(),
+
+    @Column(name = "updated_at", nullable = false)
+    var updatedAt: Instant = Instant.now()
+)
+
+/** 患者物品交接与家属探视说明: 新病区不允许陪护时生成; 旧证退回后才可释放押金/结束陪护责任 */
+@Entity
+@Table(name = "belongings_handover")
+class BelongingsHandover(
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    var id: Long? = null,
+
+    @Column(name = "transfer_id", nullable = false)
+    var transferId: Long = 0,
+
+    @Column(name = "case_id", nullable = false)
+    var caseId: Long = 0,
+
+    @Column(name = "doc_no", nullable = false, unique = true)
+    var docNo: String = "",
+
+    @Column(name = "patient_inpatient_no", nullable = false)
+    var patientInpatientNo: String = "",
+
+    @Column(name = "old_ward_code", nullable = false)
+    var oldWardCode: String = "",
+
+    @Column(name = "new_ward_code", nullable = false)
+    var newWardCode: String = "",
+
+    @Column(name = "escort_name", nullable = false)
+    var escortName: String = "",
+
+    /** 物品交接清单(逐行) */
+    @Column(name = "items", nullable = false)
+    var items: String = "",
+
+    /** 家属探视说明(探视时间/登记方式/注意事项) */
+    @Column(name = "visit_instruction", nullable = false)
+    var visitInstruction: String = "",
+
+    @Column(name = "old_permit_returned", nullable = false)
+    var oldPermitReturned: Boolean = false,
+
+    @Column(name = "old_permit_returned_at")
+    var oldPermitReturnedAt: Instant? = null,
+
+    /** 实际签收交接的护士/工号 */
+    @Column(name = "received_by")
+    var receivedBy: String? = null,
+
+    @Column(name = "deposit_releasable", nullable = false)
+    var depositReleasable: Boolean = false,
+
+    @Column(name = "generated_by", nullable = false)
+    var generatedBy: String = "",
+
+    @Column(name = "created_at", nullable = false)
+    var createdAt: Instant = Instant.now()
+)
+
+/** 迁移期"必要交接"临时通行授权: 旧证在限定时间窗可进入新病区缓冲交接点各一次(一进一出) */
+@Entity
+@Table(name = "handover_pass_grant")
+class HandoverPassGrant(
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    var id: Long? = null,
+
+    @Column(name = "transfer_id", nullable = false)
+    var transferId: Long = 0,
+
+    @Column(name = "case_id", nullable = false)
+    var caseId: Long = 0,
+
+    @Column(name = "permit_id", nullable = false)
+    var permitId: Long = 0,
+
+    @Column(name = "ward_code", nullable = false)
+    var wardCode: String = "",
+
+    @Column(name = "valid_from", nullable = false)
+    var validFrom: Instant = Instant.now(),
+
+    @Column(name = "valid_until", nullable = false)
+    var validUntil: Instant = Instant.now(),
+
+    @Column(name = "used_in", nullable = false)
+    var usedIn: Boolean = false,
+
+    @Column(name = "used_out", nullable = false)
+    var usedOut: Boolean = false,
+
+    @Column(name = "granted_by", nullable = false)
+    var grantedBy: String = "",
 
     @Column(name = "created_at", nullable = false)
     var createdAt: Instant = Instant.now()

@@ -137,6 +137,7 @@ class WardAdminService(
 
     private fun WardPolicy.toDto() = WardPolicyDto(
         wardCode, wardName, allowVisitStart.toString(), allowVisitEnd.toString(),
-        maxEscortsPerPatient, nightEscortRequiresApproval, lockdown, lockdownReason
+        maxEscortsPerPatient, nightEscortRequiresApproval, lockdown, lockdownReason,
+        wardCategory.name
     )
 }

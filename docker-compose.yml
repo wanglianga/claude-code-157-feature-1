@@ -1,5 +1,6 @@
-# 可选的容器化依赖(本机已有 PostgreSQL 时用 scripts/local-db.sh 即可, 无需启动)
-# 用法: docker compose up -d
+# 一键启动: docker compose up -d --build
+# 启动后: 陪护证服务 http://localhost:8080, PostgreSQL :55432
+# 需要真实 Kafka 时: docker compose --profile kafka up -d
 services:
   postgres:
     image: postgres:15-alpine
@@ -11,8 +12,34 @@ services:
       - "55432:5432"
     volumes:
       - escort-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U escort -d escort"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build: .
+    image: escort-pass-service:1.0.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/escort
+      DB_USER: escort
+      DB_PASSWORD: escort
+      ESCORT_KAFKA_ENABLED: "false"
+      SERVER_PORT: "8080"
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
   kafka:
+    profiles: ["kafka"]
     image: bitnami/kafka:3.7
     environment:
       KAFKA_CFG_NODE_ID: "0"

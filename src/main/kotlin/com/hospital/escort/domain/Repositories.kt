@@ -87,3 +87,29 @@ interface WardNoticeRepository : JpaRepository<WardNotice, Long> {
     fun findByWardCodeAndReadFalseOrderByCreatedAtDesc(wardCode: String): List<WardNotice>
     fun findByWardCodeOrderByCreatedAtDesc(wardCode: String): List<WardNotice>
 }
+
+interface PermitTransferRepository : JpaRepository<PermitTransfer, Long> {
+    fun findByTransferNo(transferNo: String): PermitTransfer?
+    fun findByCaseIdOrderByCreatedAtAsc(caseId: Long): List<PermitTransfer>
+
+    /** 该陪护证当前关联的未完结迁移(门禁据此隔离旧证) */
+    fun findFirstByOldPermitIdAndStatusInOrderByCreatedAtDesc(
+        oldPermitId: Long, statuses: Collection<TransferStatus>
+    ): PermitTransfer?
+
+    fun findByNewWardCodeAndStatus(newWardCode: String, status: TransferStatus): List<PermitTransfer>
+    fun countByNewWardCodeAndStatus(newWardCode: String, status: TransferStatus): Long
+}
+
+interface BelongingsHandoverRepository : JpaRepository<BelongingsHandover, Long> {
+    fun findByTransferId(transferId: Long): List<BelongingsHandover>
+    fun findFirstByTransferIdOrderByIdDesc(transferId: Long): BelongingsHandover?
+    fun findByCaseIdOrderByCreatedAtAsc(caseId: Long): List<BelongingsHandover>
+}
+
+interface HandoverPassGrantRepository : JpaRepository<HandoverPassGrant, Long> {
+    /** 某陪护证在某病区、某时刻有效的交接通行授权(取最新一条) */
+    fun findFirstByPermitIdAndWardCodeAndValidFromLessThanEqualAndValidUntilGreaterThanOrderByIdDesc(
+        permitId: Long, wardCode: String, now1: Instant, now2: Instant
+    ): HandoverPassGrant?
+}
