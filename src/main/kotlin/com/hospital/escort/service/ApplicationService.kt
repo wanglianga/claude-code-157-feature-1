@@ -8,6 +8,7 @@ import com.hospital.escort.common.notFound
 import com.hospital.escort.domain.ApplicationStatus
 import com.hospital.escort.domain.ApplicationType
 import com.hospital.escort.domain.CaseEventType
+import com.hospital.escort.domain.CaseStatus
 import com.hospital.escort.domain.EscortApplication
 import com.hospital.escort.domain.EscortApplicationRepository
 import com.hospital.escort.domain.EscortCaseRepository
@@ -188,8 +189,49 @@ class ApplicationService(
         return saved
     }
 
-    private fun validateScreening(type: ScreeningType, validUntil: Instant?) {
-        when (type) {
+    /**
+     * 转科迁移专用: 家属已确认新病区陪护规则后, 按新病区策略落一条 TRANSFER 申请,
+     * 由新病区护士审批。跳过"已有有效证/已有待审批"限制(旧证已暂停, 属于合规迁移场景),
+     * 其余校验(筛查/封闭/健康承诺)保留。
+     */
+    @Transactional
+    fun applyTransferDirect(req: ApplyRequest, replacedApplicationId: Long?): EscortApplication {
+        if (req.healthCommitment != true) badRequest("必须确认健康承诺才能提交申请")
+        validateScreening(req.screeningType!!, req.screeningValidUntil)
+        if (!req.periodEnd!!.isAfter(req.periodStart)) badRequest("陪护结束时间必须晚于开始时间")
+
+        val escortCase = caseRepository.findFirstByPatientInpatientNoAndStatusOrderByCreatedAtDesc(
+            req.patientInpatientNo, CaseStatus.ACTIVE
+        ) ?: notFound("患者[${req.patientInpatientNo}]无在院陪护记录, 不能发起迁移申请")
+        val application = EscortApplication(
+            caseId = escortCase.id!!,
+            applicationNo = "EA-" + UUID.randomUUID().toString().substring(0, 8).uppercase(),
+            applyType = ApplicationType.TRANSFER,
+            patientInpatientNo = req.patientInpatientNo,
+            wardCode = req.wardCode,
+            escortName = req.escortName,
+            escortIdNo = req.escortIdNo,
+            escortPhone = req.escortPhone,
+            relationToPatient = req.relationToPatient,
+            healthCommitment = true,
+            screeningType = req.screeningType,
+            screeningValidUntil = req.screeningValidUntil,
+            periodStart = req.periodStart!!,
+            periodEnd = req.periodEnd,
+            needNightCare = req.needNightCare,
+            replacedApplicationId = replacedApplicationId
+        )
+        val saved = applicationRepository.save(application)
+        caseService.recordEvent(
+            escortCase.id!!, CaseEventType.APPLICATION_SUBMITTED, req.escortName,
+            "提交转科陪护迁移申请(TRANSFER): ${req.escortName} 申请在新病区 ${req.wardCode} 继续照护患者 ${req.patientInpatientNo}",
+            "筛查=${req.screeningType}, 期限=${req.periodStart}~${req.periodEnd}, 夜间陪护=${req.needNightCare}",
+            "APPLICATION", saved.id
+        )
+        return saved
+    }
+
+    private fun validateScreening(type: ScreeningType, validUntil: Instant?) {        when (type) {
             ScreeningType.NONE -> badRequest("当前病区要求核酸或传染病筛查, 不能选择 NONE")
             ScreeningType.NAT, ScreeningType.ANTIGEN -> {
                 if (validUntil == null) badRequest("需提供筛查结果有效期")

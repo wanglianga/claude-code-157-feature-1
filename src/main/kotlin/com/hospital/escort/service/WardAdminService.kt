@@ -3,6 +3,7 @@ package com.hospital.escort.service
 import com.hospital.escort.api.DepositDisputeRequest
 import com.hospital.escort.api.ExitRestrictionRequest
 import com.hospital.escort.api.TransferRequest
+import com.hospital.escort.api.TransferStartRequest
 import com.hospital.escort.api.WardLockdownRequest
 import com.hospital.escort.api.WardPolicyDto
 import com.hospital.escort.common.notFound
@@ -27,7 +28,8 @@ class WardAdminService(
     private val caseRepository: EscortCaseRepository,
     private val permitRepository: EscortPermitRepository,
     private val caseService: EscortCaseService,
-    private val permitService: PermitService
+    private val permitService: PermitService,
+    private val migrationService: WardMigrationService
 ) {
 
     @Transactional(readOnly = true)
@@ -70,9 +72,27 @@ class WardAdminService(
         return policy.toDto()
     }
 
-    /** 患者转科: 默认冻结原证, 需在新病区重新申请; 同一条陪护记录上留痕 */
+    /**
+     * 患者转科:
+     *  - escortMigration=true(如普通病房转入重症过渡病区): 走陪护证迁移工作流
+     *    (暂停原证 -> 家属确认新病区规则 -> 新病区护士审批 -> 新证或旧证退回), 返回迁移单号;
+     *  - escortMigration=false: 保持原普通转科逻辑(默认冻结原证, 在新病区重新申请)。
+     */
     @Transactional
-    fun transferPatient(caseNo: String, req: TransferRequest) {
+    fun transferPatient(caseNo: String, req: TransferRequest): String? {
+        if (req.escortMigration) {
+            val transfer = migrationService.initiateTransfer(
+                caseNo,
+                TransferStartRequest(
+                    toWardCode = req.toWardCode,
+                    bedNo = req.bedNo,
+                    reason = req.reason,
+                    operator = req.operator
+                )
+            )
+            return transfer.transferNo
+        }
+
         val escortCase = caseRepository.findByCaseNo(caseNo) ?: notFound("陪护记录不存在: $caseNo")
         wardPolicyRepository.findById(req.toWardCode).orElse(null) ?: notFound("目标病区不存在: ${req.toWardCode}")
         val oldWard = escortCase.wardCode
@@ -93,6 +113,7 @@ class WardAdminService(
             "患者[${escortCase.patientInpatientNo}]转出至 $req.toWardCode")
         caseService.notifyWard(req.toWardCode, escortCase.id, escortCase.currentPermitId, "PATIENT_TRANSFERRED_IN",
             "患者[${escortCase.patientInpatientNo}]由 $oldWard 转入, 陪护安排待确认")
+        return null
     }
 
     /** 护士要求限制/解除陪护人外出 */

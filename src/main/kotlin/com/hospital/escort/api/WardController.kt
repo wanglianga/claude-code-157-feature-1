@@ -29,9 +29,18 @@ class WardController(
         wardAdminService.setLockdown(wardCode, req)
 
     @PostMapping("/cases/{caseNo}/transfer")
-    fun transfer(@PathVariable caseNo: String, @Valid @RequestBody req: TransferRequest): Map<String, String> {
-        wardAdminService.transferPatient(caseNo, req)
-        return mapOf("result" to "TRANSFERRED", "caseNo" to caseNo, "toWard" to req.toWardCode)
+    fun transfer(@PathVariable caseNo: String, @Valid @RequestBody req: TransferRequest): Map<String, String?> {
+        val transferNo = wardAdminService.transferPatient(caseNo, req)
+        return buildMap {
+            put("caseNo", caseNo)
+            put("toWard", req.toWardCode)
+            if (transferNo != null) {
+                put("result", "TRANSFER_MIGRATION_STARTED")
+                put("transferNo", transferNo)
+            } else {
+                put("result", "TRANSFERRED")
+            }
+        }
     }
 
     @PostMapping("/permits/{permitNo}/exit-restriction")

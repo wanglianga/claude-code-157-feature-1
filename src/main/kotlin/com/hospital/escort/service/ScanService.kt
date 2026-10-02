@@ -12,6 +12,8 @@ import com.hospital.escort.domain.ScanRecordRepository
 import com.hospital.escort.domain.ScanResult
 import com.hospital.escort.domain.ViolationType
 import com.hospital.escort.domain.WardPolicyRepository
+import com.hospital.escort.domain.WardTransferRepository
+import com.hospital.escort.service.WardMigrationService.Companion.OPEN_STATUSES
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -32,6 +34,7 @@ class ScanService(
     private val scanRepository: ScanRecordRepository,
     private val permitRepository: EscortPermitRepository,
     private val wardPolicyRepository: WardPolicyRepository,
+    private val transferRepository: WardTransferRepository,
     private val caseService: EscortCaseService,
     private val violationService: ViolationService,
     @Value("\${escort.zone-id}") private val zoneId: String
@@ -60,6 +63,18 @@ class ScanService(
         val policy = wardPolicyRepository.findById(permit.wardCode).orElse(null)
         val violations = mutableListOf<String>()
         var denyReason: String? = null
+
+        // 0. 转科迁移期门禁管控: 旧证已暂停, 迁移完成前不得进入新病区, 仅放行必要交接
+        val openTransfer = if (permit.status == PermitStatus.FROZEN && permit.transferSuspended) {
+            transferRepository.findFirstByOldPermitIdAndStatusIn(permit.id!!, OPEN_STATUSES)
+        } else null
+        val scanWard = req.wardCode ?: permit.wardCode
+        if (openTransfer != null) {
+            return handleTransferGate(
+                permit = permit, req = req, scannedAt = scannedAt, scanWard = scanWard,
+                transfer = openTransfer, direction = req.direction!!
+            )
+        }
 
         // 1. 证件状态
         when (permit.status) {
@@ -135,7 +150,6 @@ class ScanService(
                 multiPermitShared = multiShared, wardLockdown = wardLockdown, denyReason = denyReason
             )
         )
-
         // 归档到陪护记录事件流
         val escortCase = caseService.getById(permit.caseId)
         caseService.recordEvent(
@@ -157,6 +171,76 @@ class ScanService(
             wardCode = permit.wardCode, gateLocation = req.gateLocation, scannedAt = scannedAt,
             outOfHours = outOfHours, escortChanged = escortChanged, multiPermitShared = multiShared,
             wardLockdown = wardLockdown, denyReason = denyReason, violations = violations
+        )
+    }
+
+    /**
+     * 转科迁移期门禁(原证已暂停):
+     *  - 进入新病区: 一律拒绝并记 TRANSFER_BREACH 违规, 旧证不得直接进入新病区;
+     *  - 其余动作(离开、返回原病区办理交接): 仅放行必要交接, 记录 handoverPass, 不再恢复陪护权限。
+     */
+    private fun handleTransferGate(
+        permit: EscortPermit,
+        req: ScanRequest,
+        scannedAt: Instant,
+        scanWard: String,
+        transfer: com.hospital.escort.domain.WardTransfer,
+        direction: ScanDirection
+    ): ScanResultDto {
+        val enteringNewWard = direction == ScanDirection.IN && scanWard == transfer.toWardCode
+        val denyReason: String?
+        var handoverPass = false
+        var transferBreach = false
+        val violationTypes = mutableListOf<String>()
+
+        if (enteringNewWard) {
+            denyReason = "患者已转科, 原陪护证权限暂停, 新病区陪护迁移尚未完成(${transfer.status}), 旧证不得进入新病区"
+            transferBreach = true
+            violationTypes += violationService.recordViolation(
+                caseId = permit.caseId, permitId = permit.id, scanRecordId = null,
+                wardCode = transfer.toWardCode, type = ViolationType.TRANSFER_BREACH,
+                detail = "陪护人 ${permit.escortName} 持转科前旧证 ${permit.permitNo} 试图进入新病区 ${transfer.toWardCode}(迁移单 ${transfer.transferNo}, 状态 ${transfer.status})",
+                reportedBy = "system"
+            ).let { ViolationType.TRANSFER_BREACH.name }
+        } else {
+            // 必要交接: 离开任意病区(OUT)或进入原病区(IN) — 放行但不恢复陪护权限
+            denyReason = null
+            handoverPass = true
+        }
+
+        val rec = scanRepository.save(
+            ScanRecord(
+                caseId = permit.caseId, permitId = permit.id, permitNo = permit.permitNo,
+                wardCode = scanWard, direction = direction, gateLocation = req.gateLocation,
+                scannedAt = scannedAt, scannedIdNo = req.scannedIdNo ?: permit.escortIdNo,
+                result = if (denyReason == null) ScanResult.ALLOWED else ScanResult.DENIED,
+                wardLockdown = false, handoverPass = handoverPass, transferBreach = transferBreach,
+                denyReason = denyReason
+            )
+        )
+        val escortCase = caseService.getById(permit.caseId)
+        caseService.recordEvent(
+            permit.caseId,
+            if (direction == ScanDirection.IN) CaseEventType.SCAN_IN else CaseEventType.SCAN_OUT,
+            permit.escortName,
+            if (denyReason != null)
+                "迁移期进入新病区被拒[${req.gateLocation}]: $denyReason"
+            else
+                "迁移期必要交接放行[${req.gateLocation}] 方向=$direction 扫码病区=$scanWard, 旧证不恢复陪护权限",
+            "证号=${permit.permitNo}, 迁移单=${transfer.transferNo}, handoverPass=$handoverPass, transferBreach=$transferBreach",
+            "SCAN", rec.id
+        )
+        if (transferBreach) {
+            caseService.notifyWard(transfer.toWardCode, permit.caseId, permit.id, "TRANSFER_BREACH",
+                "陪护人 ${permit.escortName} 持旧证 ${permit.permitNo} 试图进入新病区, 已拒绝并记录违规(迁移单 ${transfer.transferNo})")
+        }
+        return ScanResultDto(
+            result = if (denyReason == null) ScanResult.ALLOWED.name else ScanResult.DENIED.name,
+            permitNo = permit.permitNo, caseNo = escortCase.caseNo,
+            wardCode = scanWard, gateLocation = req.gateLocation, scannedAt = scannedAt,
+            outOfHours = false, escortChanged = false, multiPermitShared = false,
+            wardLockdown = false, handoverPass = handoverPass, transferBreach = transferBreach,
+            denyReason = denyReason, violations = violationTypes
         )
     }
 

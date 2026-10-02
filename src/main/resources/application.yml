@@ -40,6 +40,12 @@ management:
       exposure:
         include: health,info
 
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+  api-docs:
+    path: /v3/api-docs
+
 logging:
   level:
     root: info

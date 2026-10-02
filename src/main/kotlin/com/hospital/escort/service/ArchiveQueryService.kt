@@ -6,6 +6,7 @@ import com.hospital.escort.api.EventDto
 import com.hospital.escort.api.PermitDto
 import com.hospital.escort.api.ReplacementDto
 import com.hospital.escort.api.ScanRecordDto
+import com.hospital.escort.api.TransferDto
 import com.hospital.escort.api.ViolationDto
 import com.hospital.escort.api.WardNoticeDto
 import com.hospital.escort.common.notFound
@@ -21,6 +22,7 @@ import com.hospital.escort.domain.ScanRecordRepository
 import com.hospital.escort.domain.SyncStatus
 import com.hospital.escort.domain.ViolationRecordRepository
 import com.hospital.escort.domain.WardNoticeRepository
+import com.hospital.escort.domain.WardTransferRepository
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 
@@ -37,7 +39,9 @@ class ArchiveQueryService(
     private val violationRepository: ViolationRecordRepository,
     private val eventRepository: CaseEventRepository,
     private val syncRepository: PermitSyncRepository,
-    private val noticeRepository: WardNoticeRepository
+    private val noticeRepository: WardNoticeRepository,
+    private val transferRepository: WardTransferRepository,
+    private val migrationService: WardMigrationService
 ) {
 
     @Transactional(readOnly = true)
@@ -72,6 +76,8 @@ class ArchiveQueryService(
                     requestedAt = r.requestedAt, decidedAt = r.decidedAt, decidedBy = r.decidedBy
                 )
             },
+            transfers = transferRepository.findByCaseIdOrderByInitiatedAtAsc(caseId)
+                .map { migrationService.toDto(it) },
             violations = violationRepository.findByCaseIdOrderByCreatedAtAsc(caseId).map { it.toDto() },
             events = eventRepository.findByCaseIdOrderByCreatedAtAsc(caseId).map {
                 EventDto(it.eventType.name, it.actor, it.summary, it.detail, it.refType, it.refId, it.createdAt)
@@ -113,7 +119,8 @@ fun com.hospital.escort.domain.EscortPermit.toDto(caseNo: String, syncedTargets:
     permitNo = permitNo, caseNo = caseNo, wardCode = wardCode, qrToken = qrToken,
     escortName = escortName, escortIdNo = escortIdNo, escortPhone = escortPhone,
     validFrom = validFrom, validUntil = validUntil, nightCareAllowed = nightCareAllowed,
-    status = status, lockdownFrozen = lockdownFrozen, exitRestricted = exitRestricted,
+    status = status, lockdownFrozen = lockdownFrozen, transferSuspended = transferSuspended,
+    exitRestricted = exitRestricted,
     exitRestrictReason = exitRestrictReason, issuedAt = issuedAt, returnedAt = returnedAt,
     syncedTargets = syncedTargets
 )
@@ -122,7 +129,8 @@ fun com.hospital.escort.domain.ScanRecord.toDto() = ScanRecordDto(
     id = id!!, permitNo = permitNo, direction = direction.name, gateLocation = gateLocation,
     scannedAt = scannedAt, scannedIdNo = scannedIdNo, result = result.name,
     outOfHours = outOfHours, escortChanged = escortChanged, multiPermitShared = multiPermitShared,
-    wardLockdown = wardLockdown, denyReason = denyReason
+    wardLockdown = wardLockdown, handoverPass = handoverPass, transferBreach = transferBreach,
+    denyReason = denyReason
 )
 
 fun com.hospital.escort.domain.ViolationRecord.toDto() = ViolationDto(

@@ -106,6 +106,7 @@ class PermitService(
     fun unfreezePermit(permitNo: String, operator: String): EscortPermit {
         val permit = getByPermitNo(permitNo)
         if (permit.status != PermitStatus.FROZEN) conflict("陪护证未处于冻结状态, 当前: ${permit.status}")
+        if (permit.transferSuspended) conflict("该证因患者转科暂停, 须完成迁移审批或撤销迁移后才能恢复, 不能直接解冻")
         permit.status = PermitStatus.ACTIVE
         permit.freezeReason = null
         permit.frozenAt = null
@@ -121,12 +122,58 @@ class PermitService(
         return saved
     }
 
+    /**
+     * 患者转科: 原陪护证权限不再适用, 暂停原证并同步门禁/扫码点/安保停权。
+     * 迁移完成前旧证不得进入新病区, 门禁仅放行必要交接(见 ScanService)。
+     * 状态置 FROZEN 并打 transferSuspended 标记, 与封闭冻结/普通冻结区分。
+     */
+    @Transactional
+    fun suspendForTransfer(permit: EscortPermit, fromWard: String, toWard: String, operator: String): EscortPermit {
+        if (permit.status != PermitStatus.ACTIVE) {
+            conflict("只有有效(ACTIVE)陪护证可以随转科暂停, 当前: ${permit.status}")
+        }
+        permit.status = PermitStatus.FROZEN
+        permit.transferSuspended = true
+        permit.lockdownFrozen = false
+        permit.freezeReason = "患者转科 $fromWard -> $toWard, 原病区陪护权限暂停, 待新病区审批"
+        permit.frozenAt = Instant.now()
+        permit.frozenBy = operator
+        val saved = permitRepository.save(permit)
+        val escortCase = caseService.getById(saved.caseId)
+        caseService.recordEvent(
+            saved.caseId, CaseEventType.PERMIT_FROZEN, operator,
+            "陪护证 ${saved.permitNo} 因患者转科暂停: $fromWard -> $toWard, 待新病区审批迁移",
+            "迁移期旧证不得进入新病区, 门禁仅放行必要交接", "PERMIT", saved.id
+        )
+        syncService.syncPermit(saved, escortCase.caseNo, SyncAction.FREEZE)
+        return saved
+    }
+
+    /** 迁移撤销(患者未完成新病区审批即转回): 恢复原证 */
+    @Transactional
+    fun resumeAfterTransferCancelled(permit: EscortPermit, operator: String): EscortPermit {
+        permit.status = PermitStatus.ACTIVE
+        permit.transferSuspended = false
+        permit.freezeReason = null
+        permit.frozenAt = null
+        permit.frozenBy = null
+        val saved = permitRepository.save(permit)
+        val escortCase = caseService.getById(saved.caseId)
+        caseService.recordEvent(saved.caseId, CaseEventType.PERMIT_UNFROZEN, operator,
+            "转科迁移撤销, 陪护证 ${saved.permitNo} 恢复原病区权限", null, "PERMIT", saved.id)
+        syncService.syncPermit(saved, escortCase.caseNo, SyncAction.UNFREEZE)
+        return saved
+    }
+
     /** 退证: 陪护结束或提前终止, 证件回收并同步门禁失效 */
     @Transactional
     fun returnPermit(permitNo: String, returnedBy: String, channel: String, note: String?): EscortPermit {
         val permit = getByPermitNo(permitNo)
         if (permit.status != PermitStatus.ACTIVE && permit.status != PermitStatus.FROZEN && permit.status != PermitStatus.EXPIRED) {
             conflict("当前状态(${permit.status})不允许退证")
+        }
+        if (permit.transferSuspended) {
+            conflict("该陪护证因患者转科暂停, 须通过转科迁移结算退回旧证(迁移单 old-permit-return), 退回后才释放押金、结束陪护责任")
         }
         permit.status = PermitStatus.RETURNED
         permit.returnedAt = Instant.now()
@@ -174,6 +221,7 @@ class PermitService(
     fun expireOverduePermits(now: Instant = Instant.now()): Int {
         val overdue = permitRepository.findByStatusAndValidUntilBefore(PermitStatus.ACTIVE, now) +
                 permitRepository.findByStatusAndValidUntilBefore(PermitStatus.FROZEN, now)
+                    .filterNot { it.transferSuspended }
         overdue.forEach { permit ->
             permit.status = PermitStatus.EXPIRED
             permitRepository.save(permit)

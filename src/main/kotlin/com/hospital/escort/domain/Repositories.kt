@@ -87,3 +87,21 @@ interface WardNoticeRepository : JpaRepository<WardNotice, Long> {
     fun findByWardCodeAndReadFalseOrderByCreatedAtDesc(wardCode: String): List<WardNotice>
     fun findByWardCodeOrderByCreatedAtDesc(wardCode: String): List<WardNotice>
 }
+
+interface WardTransferRepository : JpaRepository<WardTransfer, Long> {
+    fun findByTransferNo(transferNo: String): WardTransfer?
+
+    fun findByCaseIdOrderByInitiatedAtAsc(caseId: Long): List<WardTransfer>
+
+    /** 该陪护证作为"旧证"挂着的未终结迁移(用于门禁判定) */
+    fun findFirstByOldPermitIdAndStatusIn(oldPermitId: Long, statuses: Collection<TransferStatus>): WardTransfer?
+
+    fun findByStatusInOrderByInitiatedAtAsc(statuses: Collection<TransferStatus>): List<WardTransfer>
+
+    fun countByToWardCodeAndStatus(toWardCode: String, status: TransferStatus): Long
+}
+
+interface HandoverDocumentRepository : JpaRepository<HandoverDocument, Long> {
+    fun findByTransferIdOrderByDocTypeAsc(transferId: Long): List<HandoverDocument>
+    fun findByCaseIdOrderByCreatedAtAsc(caseId: Long): List<HandoverDocument>
+}
